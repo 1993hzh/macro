@@ -47,13 +47,15 @@ static void simulateKeyEvent(char key) {
 
 	// set timer
 	// TODO bind delay by user
-	Sleep(300);
+	Sleep(150);
 }
 
 DWORD WINAPI KeySimulateThread(void* data) {
 	log("Macro thread has been created.");
 	while (true) {
 		// TODO bind custom key
+		simulateKeyEvent(VK_NUMPAD5);
+		simulateKeyEvent(VK_NUMPAD6);
 		simulateKeyEvent(VK_NUMPAD7);
 		simulateKeyEvent(VK_NUMPAD8);
 		simulateKeyEvent(VK_NUMPAD9);
