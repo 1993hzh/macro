@@ -10,7 +10,8 @@
 #include <conio.h>
 #define EXIT_SIGNAL 26
 HHOOK hook;
-HANDLE thread;
+HANDLE listenForExitThread;
+HANDLE macroThread;
 
 static void log(const char* msg) {
 	time_t now;
@@ -24,52 +25,57 @@ static void log(const char* msg) {
 	printf("[%s] %s\n", buffer, msg);
 }
 
+static void logKeyEvent(char* pressedKey) {
+	std::string msg("Key: ");
+	msg.append(pressedKey).append(" is pressed.");
+	log(msg.c_str());
+}
+
 static void simulateKeyEvent(char key) {
 	INPUT input;
 	WORD vkey = key;
 	input.type = INPUT_KEYBOARD;
 	input.ki.wScan = MapVirtualKey(vkey, MAPVK_VK_TO_VSC);
-	input.ki.time = 1000;
+	input.ki.time = 0;
 	input.ki.dwExtraInfo = 0;
 	input.ki.wVk = vkey;
 
-	input.ki.dwFlags = 0;
+	input.ki.dwFlags = 0;// key down
 	SendInput(1, &input, sizeof(INPUT));
-
 	input.ki.dwFlags = KEYEVENTF_KEYUP;
 	SendInput(1, &input, sizeof(INPUT));
+
+	// set timer
+	// TODO bind delay by user
+	Sleep(300);
 }
 
-DWORD WINAPI ThreadFunc(void* data) {
-	log("thread has been created.");
+DWORD WINAPI KeySimulateThread(void* data) {
+	log("Macro thread has been created.");
 	while (true) {
-		simulateKeyEvent(VK_NUMPAD5);
-		simulateKeyEvent(VK_NUMPAD6);
+		// TODO bind custom key
+		simulateKeyEvent(VK_NUMPAD7);
+		simulateKeyEvent(VK_NUMPAD8);
+		simulateKeyEvent(VK_NUMPAD9);
 	}
 	return 0;
 }
 
 static void startMacro() {
-	if (thread == NULL) {
-		log("No thread found, try to create one.");
-		thread = CreateThread(NULL, 0, ThreadFunc, NULL, 0, NULL);
+	if (macroThread == NULL) {
+		log("No Macro thread found, try to create one.");
+		macroThread = CreateThread(NULL, 0, KeySimulateThread, NULL, 0, NULL);
 		return;
 	}
-	ResumeThread(thread);
+	ResumeThread(macroThread);
 }
 
 static void endMacro() {
-	if (!thread) {
-		log("No thread found.");
+	if (!macroThread) {
+		log("No Macro thread found.");
 		return;
 	}
-	SuspendThread(thread);
-}
-
-static void logKeyEvent(char* pressedKey) {
-	std::string msg("Key: ");
-	msg.append(pressedKey).append(" is pressed.");
-	log(msg.c_str());
+	SuspendThread(macroThread);
 }
 
 static void handle(char pressedKey) {
@@ -101,33 +107,63 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
+static void terminateThread(HANDLE thread, char* threadName) {
+	std::string msg("");
+	if (!thread) {
+		log(msg.append("No ").append(threadName).append(" thread found.").c_str());
+	}
+	else {
+		// terminate the thread
+		CloseHandle(thread);
+		log(msg.append("Thread: ").append(threadName).append(" has been terminated.").c_str());
+	}
+}
+
 static void exitMacro() {
 	// unregister hook
 	UnhookWindowsHookEx(hook);
-	if (!thread) {
-		log("No thread found.");
-	} else {
-		CloseHandle(thread);
-		log("thread has been terminated.");
-	}
+	log("Hook has been unregistered.");
 
-	printf("\nHook has been unregistered, press any key to exit.");
+	terminateThread(macroThread, "SendKeyInputThread");
+	terminateThread(listenForExitThread, "ListenThread");
+
+	log("Process has been terminated successfully.");
+	log("Press any key to close console.");
 	char c = _getch();
 	exit(0);
 }
 
-int main() {
+DWORD WINAPI HookThread(void* data) {
+	log("Exit thread has been created and running.");
+
+	char c;
+	while ((c = _getch()) != EXIT_SIGNAL) {
+		// loop to wait for exit signal
+	}
+
+	exitMacro();
+
+	return 0;
+}
+
+static void init() {
 	// register hook
 	hook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, NULL, 0);
-	printf("Hook has been registered, Macro process is started.\n");
-	printf("\nPress CTRL-Z to stop the process.\n");
+	log("Hook has been registered, Macro process is started.");
+	log("Press CTRL-Z to exit the process.");
+
+	// create thread to listen to exit signal
+	listenForExitThread = CreateThread(NULL, 0, HookThread, NULL, 0, NULL);
+}
+
+int main() {
+	init();
 
 	MSG msg;
 	while (!GetMessage(&msg, NULL, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
-
-	// TODO add a exit function here
+	
 	return 0;
 }
