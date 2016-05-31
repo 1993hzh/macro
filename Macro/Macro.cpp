@@ -8,31 +8,30 @@
 #include <tchar.h>
 #include <time.h>
 #include <conio.h>
+typedef unsigned char BYTE;
 #define EXIT_SIGNAL 26
 #define LOG_ERROR "ERROR"
 #define LOG_INFO "INFO"
 #define CONFIG_FILE_PATH ".\\configMacro.ini"
+#define SPLIT_SYMBOL ","
 
 LPCTSTR filePath = _T(CONFIG_FILE_PATH);
 LPCTSTR appName = _T("macro");
 LPCTSTR key_delay = _T("delay");
-LPCTSTR key_first = _T("first hotkey");
-LPCTSTR key_second = _T("second hotkey");
-LPCTSTR key_third = _T("thrid hotkey");
-LPCTSTR key_fourth = _T("fourth hotkey");
+LPCTSTR hot_key = _T("hotkey");
 
 HHOOK hook;
 HANDLE listenForExitThread;
-HANDLE macroThread;
+HANDLE simulateKeyPressThread;
+BYTE ENABLED_HOTKEY = 0;
+BOOL isRun = true;
 
 struct Config {
-	short delay;
-	short first;
-	short second;
-	short third;
-	short fourth;
+	unsigned short delay;
+	BYTE* hotKeys;
 };
 
+Config* config;
 void exitProgram();
 
 static void log(const char* severity, const char* msg) {
@@ -57,37 +56,68 @@ static void logKeyEvent(char* pressedKey) {
 	log(msg.c_str());
 }
 
-static void simulateKeyEvent(char key, unsigned short delay) {
-	if (key == 0x59) {
-		// if user did not bind this key, the value will be 60 - 1 = 59
+static void simulateKeyEvent(const unsigned short key, unsigned short delay) {
+	if (key == -1) {
+		// user did not bind this key
 		return;
 	}
 
 	INPUT input;
-	WORD vkey = key;
 	input.type = INPUT_KEYBOARD;
-	input.ki.wScan = MapVirtualKey(vkey, MAPVK_VK_TO_VSC);
 	input.ki.time = 0;
 	input.ki.dwExtraInfo = 0;
-	input.ki.wVk = vkey;
+	input.ki.wVk = 0;// use hardware scan code instead
 
-	input.ki.dwFlags = 0;// key down
+	input.ki.wScan = key;
+	input.ki.dwFlags = KEYEVENTF_SCANCODE;
 	SendInput(1, &input, sizeof(INPUT));
-	input.ki.dwFlags = KEYEVENTF_KEYUP;
+	// key release
+	input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
 	SendInput(1, &input, sizeof(INPUT));
 
 	// set timer
 	Sleep(delay);
 }
 
+static BYTE getBindedKey(char* str) {
+	const char value = str[0];// currently only support numpad
+	if (value < 0x30 || value > 0x39) {// ascii code
+		log(LOG_ERROR, "currently only support Number: 0-9 to bind the key.");
+		exitProgram();
+	}
+	ENABLED_HOTKEY++;
+	return value == 0x30 ? 11 : value - 47;
+}
+
+static BYTE* split(char* str) {
+	BYTE pos = 0;
+	BYTE* array = (BYTE*)calloc(10, sizeof(BYTE));
+
+	char *current = NULL, *next = NULL;
+	current = strtok_s(str, SPLIT_SYMBOL, &next);
+	while (current != NULL) {
+		pos = ENABLED_HOTKEY;
+		array[pos] = getBindedKey(current);
+		current = strtok_s(NULL, SPLIT_SYMBOL, &next);
+	}
+	return array;
+}
+
 static void readConfig(Config* config) {
 	// by default the delay is 200ms
 	config->delay = GetPrivateProfileInt(appName, key_delay, 200, filePath);
-	// by default the key bind is NULL
-	config->first = GetPrivateProfileInt(appName, key_first, -1, filePath);
-	config->second = GetPrivateProfileInt(appName, key_second, -1, filePath);
-	config->third = GetPrivateProfileInt(appName, key_third, -1, filePath);
-	config->fourth = GetPrivateProfileInt(appName, key_fourth, -1, filePath);
+
+	// by default the key bind is 6,7,8
+	wchar_t* buffer = (wchar_t*)calloc(20, sizeof(wchar_t));
+	char* keys = (char*)calloc(20, sizeof(char));
+	GetPrivateProfileString(appName, hot_key, _T("6,7,8"), buffer, 20, filePath); // suppose 0-9 is all used,then the max_size should be 2*10-1+1 ('\0')
+
+	size_t charsConverted = 0;
+	wcstombs_s(&charsConverted, keys, 20, buffer, 20);
+	config->hotKeys = split(keys);
+
+	free(buffer);
+	free(keys);
 }
 
 static BOOL isFileExists(const char* path) {
@@ -103,13 +133,9 @@ static void writeConfig() {
 		return;
 	}
 
-	// this code section smells bad
 	BOOL result = true;
 	result &= WritePrivateProfileString(appName, key_delay, _T("200"), filePath);
-	result &= WritePrivateProfileString(appName, key_first, _T("6"), filePath);
-	result &= WritePrivateProfileString(appName, key_second, _T("7"), filePath);
-	result &= WritePrivateProfileString(appName, key_third, _T("8"), filePath);
-	result &= WritePrivateProfileString(appName, key_fourth, _T("9"), filePath);
+	result &= WritePrivateProfileString(appName, hot_key, _T("6,7,8"), filePath);
 
 	if (!result) {
 		log(LOG_ERROR, "configMacro.ini write failed.");
@@ -119,49 +145,48 @@ static void writeConfig() {
 	}
 }
 
-static short getBindedKey(const short value) {
-	if ((value < 0 || value > 9) && value != -1) {
-		log(LOG_ERROR, "currently only support Number: 0-9 to bind the key.");
-		exitProgram();
-	}
-
-	return 0x60 + value;
-}
-
 DWORD WINAPI KeySimulateThread(void* data) {
-	log("Macro thread has been created.");
+	log("Simulate keypress thread has started.");
 
-	log("reading the config...");
-	Config* config = (Config*)malloc(sizeof(Config));
-	readConfig(config);
-	short first = getBindedKey(config->first), second = getBindedKey(config->second), third = getBindedKey(config->third), fourth = getBindedKey(config->fourth), delay = config->delay;
-	free(config);
-	log("read the config successfully.");
-
-	while (true) {
-		simulateKeyEvent(first, delay);
-		simulateKeyEvent(second, delay);
-		simulateKeyEvent(third, delay);
-		simulateKeyEvent(fourth, delay);
+	Config* config = (Config*)data;
+	while (isRun) {
+		for (int i = 0; i < ENABLED_HOTKEY; i++) {
+			simulateKeyEvent(config->hotKeys[i], config->delay);
+		}
 	}
 	return 0;
 }
 
-static void startMacro() {
-	if (macroThread == NULL) {
-		log("No Macro thread found, try to create one.");
-		macroThread = CreateThread(NULL, 0, KeySimulateThread, NULL, 0, NULL);
-		return;
+DWORD WINAPI HookThread(void* data) {
+	log("Exit thread has been created and running.");
+
+	char c;
+	while ((c = _getch()) != EXIT_SIGNAL) {
+		// loop to wait for exit signal
 	}
-	ResumeThread(macroThread);
+	exitProgram();
+	return 0;
+}
+
+static void startMacro() {
+	if (!simulateKeyPressThread) {
+		isRun = true;
+		simulateKeyPressThread = CreateThread(NULL, 0, KeySimulateThread, (void*)config, 0, NULL);
+	}
+	//ResumeThread(simulateKeyPressThread);
 }
 
 static void endMacro() {
-	if (!macroThread) {
-		log("No Macro thread found.");
+	isRun = false;
+	simulateKeyPressThread = NULL;
+	/*
+	if (!simulateKeyPressThread) {
+		log(LOG_ERROR, "No simulate key press thread found!");
 		return;
 	}
-	SuspendThread(macroThread);
+	CloseHandle(simulateKeyPressThread);
+	*/
+	//SuspendThread(simulateKeyPressThread);
 }
 
 static void handle(char pressedKey) {
@@ -210,26 +235,14 @@ static void exitProgram() {
 	UnhookWindowsHookEx(hook);
 	log("Hook has been unregistered.");
 
-	terminateThread(macroThread, "SendKeyInputThread");
+	terminateThread(simulateKeyPressThread, "SimulateKeyInputThread");
+	free(config);
 	terminateThread(listenForExitThread, "ListenThread");
 
 	log("Process has been terminated successfully.");
 	log("Press any key to close console.");
 	char c = _getch();
 	exit(0);
-}
-
-DWORD WINAPI HookThread(void* data) {
-	log("Exit thread has been created and running.");
-
-	char c;
-	while ((c = _getch()) != EXIT_SIGNAL) {
-		// loop to wait for exit signal
-	}
-
-	exitProgram();
-
-	return 0;
 }
 
 static void init() {
@@ -243,6 +256,12 @@ static void init() {
 
 	// create thread to listen to exit signal
 	listenForExitThread = CreateThread(NULL, 0, HookThread, NULL, 0, NULL);
+
+	// read the config file
+	log("reading the config file...");
+	config = (Config*)malloc(sizeof(Config));
+	readConfig(config);
+	log("read the config file successfully.");
 }
 
 int main() {
