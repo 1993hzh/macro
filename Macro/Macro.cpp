@@ -71,6 +71,8 @@ static void simulateKeyEvent(const unsigned short key, unsigned short delay) {
 	input.ki.wScan = key;
 	input.ki.dwFlags = KEYEVENTF_SCANCODE;
 	SendInput(1, &input, sizeof(INPUT));
+
+	Sleep(15);// sleep for 15ms to let the program detects key event
 	// key release
 	input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
 	SendInput(1, &input, sizeof(INPUT));
@@ -154,6 +156,8 @@ DWORD WINAPI KeySimulateThread(void* data) {
 			simulateKeyEvent(config->hotKeys[i], config->delay);
 		}
 	}
+
+	log("Simulate keypress thread has finished.");
 	return 0;
 }
 
