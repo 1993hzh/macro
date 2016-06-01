@@ -131,7 +131,6 @@ static BOOL isFileExists(const char* path) {
 
 static void writeConfig() {
 	if (isFileExists(CONFIG_FILE_PATH)) {
-		log("configMacro.ini already exists.");
 		return;
 	}
 
@@ -148,7 +147,7 @@ static void writeConfig() {
 }
 
 DWORD WINAPI KeySimulateThread(void* data) {
-	log("Simulate keypress thread has started.");
+	log("Start Simulate keypress thread.");
 
 	Config* config = (Config*)data;
 	while (isRun) {
@@ -157,7 +156,7 @@ DWORD WINAPI KeySimulateThread(void* data) {
 		}
 	}
 
-	log("Simulate keypress thread has finished.");
+	log("Finish Simulate keypress thread.");
 	return 0;
 }
 
@@ -256,7 +255,15 @@ static void init() {
 	// register hook
 	hook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, NULL, 0);
 	log("Hook has been registered, Macro process is started.");
-	log("Press CTRL-Z to exit the process.");
+
+	// here is the remind log
+	printf("\n");
+	printf("*******************************************************************************\n");
+	printf("*                  Press HOME to start the macro.                             *\n");
+	printf("*                  Press END to end the macro.                                *\n");
+	printf("*                  Press CTRL-Z to exit the process.                          *\n");
+	printf("*******************************************************************************\n");
+	printf("\n");
 
 	// create thread to listen to exit signal
 	listenForExitThread = CreateThread(NULL, 0, HookThread, NULL, 0, NULL);
